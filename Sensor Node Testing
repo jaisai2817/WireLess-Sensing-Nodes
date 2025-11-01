@@ -1,0 +1,152 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+#include <stdlib.h>
+#include <C:\Users\Chandan\Documents\Atmel Studio\7.0\Header_file.h>
+#define  F_CPU 8000000ul
+//#define BMP280_ADDR 0x76
+
+
+int main(void)
+{
+	// Initialize USART0
+	init_usart();
+	USART0_init();
+	init_i2c();
+	I2C_init();
+	tsl2561_init();
+	sei();
+	DDRF &= ~((1 << PF0)|(1 << PF1)|(1 << PF2));
+	read_calibration_data();
+	while (1)
+	{
+		if(USART_Receive() == '3'){
+			USART_putstring("C_Node");
+			ADCSRA |= (1 << ADPS2) | (1 << ADPS1);
+			ADMUX &= ~((1 << MUX0)|(1 << MUX1)|(1 << MUX2));
+			ADMUX |= (1 << MUX1);
+			ADMUX |= (1 << REFS0);
+			ADCSRA |= (1 << ADEN);
+			
+			uint16_t adc_value = ADC_read();
+			//Setting the Resolution
+			float voltage = (adc_value * 5.0) / 1023.0;
+			float sensor_voltage = voltage * (0.818 - 0.031) / 5.0 + 0.031;
+			
+			float RH = (sensor_voltage - 0.031) / (0.818 - 0.031) * 100;
+			int RH_integer = (int)RH;
+			//Changing to ASCII
+			char buffer_HIH[20];
+			
+			//USART_putstring("RH%: ");
+			if (RH_integer < 100) {
+				usart_transmit('0');
+				if (RH_integer < 10) {
+					usart_transmit('0');
+				}
+			}
+			itoa(RH_integer,buffer_HIH,10);
+			for (int i = 0; buffer_HIH[i] != '\0'; i++) {
+				USART0_transmit_char(buffer_HIH[i]);
+			}
+			
+			_delay_ms(2000);
+			ADCSRA &= ~(1 << ADEN);
+			//usart_transmit('\n');
+			//usart_transmit('\r');
+			
+			// Reading TSL2561 Data
+			uint8_t msb, lsb;
+			uint8_t msb1, lsb1;
+			
+			// Read channel 1 data
+			tsl2561_read_channel0(&msb, &lsb);
+			tsl2561_read_channel1(&msb1, &lsb1);
+			/*USART0_TransmitString("CH0: ");*/
+			// Print MSB and LSB separately
+			// 		usart_transmit(msb);
+			// 		usart_transmit(lsb);
+			// 		usart_transmit(msb1);
+			// 		usart_transmit(lsb1);
+			uint16_t ch0 = (msb << 8) | lsb;
+			uint16_t ch1 = (msb1 << 8) | lsb1;
+			
+			float lux = calculate_lux(ch0,ch1);
+			int lux_int = (int)lux;
+			char buffer_Lux[10];
+			
+			//USART_putstring("LUX: ");
+			if (lux_int < 1000) {
+				usart_transmit('0');
+				if (lux_int < 100) {
+					usart_transmit('0');
+					if (lux_int < 10) {
+						usart_transmit('0');
+					}
+				}
+			}
+			itoa(lux_int, buffer_Lux, 10);
+			for (int i = 0; buffer_Lux[i] != '\0'; i++) {
+				USART0_transmit_char(buffer_Lux[i]);
+			}
+			
+			//usart_transmit('\n');
+			//usart_transmit('\r');
+			_delay_ms(2000);
+			
+			
+			
+			
+			ADCSRA |= (1 << ADPS2) | (1 << ADPS1);
+			ADMUX &= ~((1 << MUX0)|(1 << MUX1)|(1 << MUX2));
+			ADMUX |= (1 << REFS0);
+			ADCSRA |= (1 << ADEN);
+			
+			uint16_t adc_value_rtd;
+			float voltage_rtd;
+			adc_value_rtd = ADC_read();
+			voltage_rtd = (adc_value_rtd * 5.0) / 1023.0;
+			
+			//Conversion to Temperature
+			float temp = (voltage_rtd - (2.571+0.087))*100;
+			
+			
+			char buffer[20]; // Buffer to store the string representation of the voltage
+			dtostrf(temp, 5, 3, buffer); // 5 is the width, 3 is the precision
+			//USART_putstring("RTD Temperature: ");
+			
+			for (int i = 0; buffer[i] != '\0'; i++) {
+				usart_transmit(buffer[i]);
+			}
+			
+			//usart_transmit('\n');
+			//usart_transmit('\r');
+			_delay_ms(2000);
+			ADCSRA &= ~(1 << ADEN);
+			//USART_putstring("648.000");
+			
+			//Reading BMP280
+			uint32_t raw_pressure = read_raw_pressure();
+			uint32_t raw_temperature = read_raw_temperature();
+			
+			// Compensate temperature and pressure
+			compensate_temperature(raw_temperature);
+			int32_t pressure = compensate_pressure(raw_pressure);
+			float Final_Pressure = pressure/25600;
+			
+			// Convert pressure to string
+			char buffer1[20];
+			dtostrf(Final_Pressure, 5, 3, buffer1);
+			
+			// Send pressure string over USART
+			//USART_putstring("Pressure: ");
+			USART_putstring(buffer1);
+			
+			//For marking the end of Dataframe
+			//usart_transmit('\n');
+			//usart_transmit('\r');
+			_delay_ms(2000);
+			USART_putstring("END");
+		}
+	}
+}
